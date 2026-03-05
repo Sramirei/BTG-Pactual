@@ -1,0 +1,201 @@
+service: btg-funds-platform
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  stage: ${opt:stage, 'dev'}
+  region: us-east-1
+  logRetentionInDays: 14
+  environment:
+    NODE_ENV: production
+    JWT_SECRET: ${env:JWT_SECRET}
+    JWT_EXPIRES_IN: 1h
+    INITIAL_BALANCE: 500000
+    CORS_ORIGIN: '*'
+    USERS_TABLE: ${self:service}-${self:provider.stage}-users
+    FUNDS_TABLE: ${self:service}-${self:provider.stage}-funds
+    SUBSCRIPTIONS_TABLE: ${self:service}-${self:provider.stage}-subscriptions
+    TRANSACTIONS_TABLE: ${self:service}-${self:provider.stage}-transactions
+    SNS_TOPIC_ARN:
+      Ref: BtgNotificationsTopic
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+            - dynamodb:Query
+            - dynamodb:Scan
+            - dynamodb:TransactWriteItems
+          Resource:
+            - Fn::GetAtt:
+                - UsersTable
+                - Arn
+            - Fn::Sub: '${UsersTable.Arn}/index/*'
+            - Fn::GetAtt:
+                - FundsTable
+                - Arn
+            - Fn::GetAtt:
+                - SubscriptionsTable
+                - Arn
+            - Fn::GetAtt:
+                - TransactionsTable
+                - Arn
+        - Effect: Allow
+          Action:
+            - sns:Publish
+            - sns:Subscribe
+            - sns:ListSubscriptionsByTopic
+          Resource:
+            Ref: BtgNotificationsTopic
+        - Effect: Allow
+          Action:
+            - sns:Publish
+          Resource: "*"
+
+functions:
+  api:
+    handler: src/lambda.handler
+    timeout: 29
+    memorySize: 256
+    events:
+      - httpApi:
+          method: ANY
+          path: /
+      - httpApi:
+          method: ANY
+          path: /{proxy+}
+
+resources:
+  Resources:
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.USERS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S
+          - AttributeName: email
+            AttributeType: S
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: email-index
+            KeySchema:
+              - AttributeName: email
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+        SSESpecification:
+          SSEEnabled: true
+
+    FundsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.FUNDS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: fundId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: fundId
+            KeyType: HASH
+        SSESpecification:
+          SSEEnabled: true
+
+    SubscriptionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.SUBSCRIPTIONS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S
+          - AttributeName: fundId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+          - AttributeName: fundId
+            KeyType: RANGE
+        SSESpecification:
+          SSEEnabled: true
+
+    TransactionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.TRANSACTIONS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S
+          - AttributeName: transactionKey
+            AttributeType: S
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+          - AttributeName: transactionKey
+            KeyType: RANGE
+        SSESpecification:
+          SSEEnabled: true
+
+    BtgNotificationsTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: ${self:service}-${self:provider.stage}-notifications
+
+    FrontendBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName:
+          Fn::Sub: '${AWS::StackName}-frontend-${AWS::AccountId}'
+        WebsiteConfiguration:
+          IndexDocument: index.html
+          ErrorDocument: index.html
+        VersioningConfiguration:
+          Status: Enabled
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: false
+          BlockPublicPolicy: false
+          IgnorePublicAcls: false
+          RestrictPublicBuckets: false
+
+    FrontendBucketPolicy:
+      Type: AWS::S3::BucketPolicy
+      Properties:
+        Bucket:
+          Ref: FrontendBucket
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal: '*'
+              Action:
+                - s3:GetObject
+              Resource:
+                Fn::Sub: '${FrontendBucket.Arn}/*'
+
+  Outputs:
+    ApiEndpoint:
+      Value:
+        Fn::Sub: 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com'
+    NotificationsTopicArn:
+      Value:
+        Ref: BtgNotificationsTopic
+    FrontendBucketName:
+      Value:
+        Ref: FrontendBucket
+    FrontendWebsiteUrl:
+      Value:
+        Fn::GetAtt:
+          - FrontendBucket
+          - WebsiteURL
+
+plugins:
+  - serverless-offline

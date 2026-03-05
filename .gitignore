@@ -137,3 +137,13 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Local agent skills and lock file
+.agents/skills/
+.kilocode/
+.qodo/
+skills-lock.json
+
+# Explicit project dependencies
+front/node_modules/
+back/node_modules/
